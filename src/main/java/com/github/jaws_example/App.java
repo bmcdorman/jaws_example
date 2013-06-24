@@ -15,12 +15,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
-import java.util.Scanner;
 
-/**
- * Hello world!
- *
- */
 public class App {
 	public static class Worker extends Thread {
 		private Socket s;
@@ -32,6 +27,7 @@ public class App {
 		private DecodedFrame workingDecode;
 		private EncodedFrame workingEncode;
 		
+		// By default our state machine is in the http state
 		private Mode mode = Mode.Http;
 		
 		public Worker(final Socket s) {
@@ -46,17 +42,22 @@ public class App {
 			if(header == null) return false;
 			System.out.println(header);
 			try {
+				// Get the client's handshake
 				ClientHandshake clientHandshake = ClientHandshake
 					.parseClientHandshake(header);
 				System.out.println("Got valid client handshake.");
 				
+				// Prepare our server handshake
 				ServerHandshake serverHandshake = new ServerHandshake();
-				
 				serverHandshake.setKey(clientHandshake.getKey());
 				final HttpHeader response = serverHandshake.getHeader();
 				byte[] toSend = response.generateString().getBytes();
 				System.out.println(response);
-				s.getOutputStream().write(toSend);
+				
+				// Write it out
+				out.write(toSend);
+				
+				// Send our state machine to the WebSocket state
 				mode = Mode.WebSocket;
 			} catch(HandshakeException e) {
 				System.out.println("Client didn't send valid handshake.");
@@ -66,12 +67,28 @@ public class App {
 			return true;
 		}
 		
+		// Extremely simple. Just to show useful manipulation of data
+		private static String reverseWords(final String sentence) {
+			String[] words = sentence.split(" ");
+			String ret = "";
+			for(String word : words) {
+				for(int i = word.length() - 1; i >= 0; --i) {
+					ret += String.valueOf(word.charAt(i));
+				}
+				ret += " ";
+			}
+			ret = ret.trim();
+			return ret;
+		}
+		
 		private boolean handleWebSocket() throws IOException {
 			final InputStream in = s.getInputStream();
 			final OutputStream out = s.getOutputStream();
 			
+			// No data? Go back to loop, yield, and try again.
 			if(in.available() == 0) return true;
 			
+			// Decode the incoming data
 			System.out.println("Handle web socket");
 			try {
 				workingDecode = DecodedFrame.decode(in, workingDecode);
@@ -86,25 +103,34 @@ public class App {
 			
 			System.out.printf("Header: %x\n", workingDecode.header);
 			System.out.printf("Payload length: %d\n", workingDecode.payloadLength);
-			System.out.println("Data: " + new String(workingDecode.data, "UTF8"));
 			
+			// Reverse the words of the string
+			final String sentence = new String(workingDecode.data, 0,
+				workingDecode.payloadLength, "UTF8");
+			System.out.println("Data: " + sentence);
+			final String echoString = reverseWords(sentence);
+			final byte[] echoUtf8 = echoString.getBytes("UTF8");
+			
+			// Encode our return message.
 			System.out.println("Sending back encoded frame.");
 			workingEncode = EncodedFrame.encode(HeaderConstants.TEXT_FRAME_OPCODE, true,
-				false, workingDecode.data, 0, workingDecode.payloadLength, workingEncode);
+				false, echoUtf8, 0, echoUtf8.length, workingEncode);
 			if(!workingEncode.valid) {
 				System.out.println("Encode was invalid");
 				return true;
 			}
+			
+			// Write it out
 			System.out.printf("Writing payload of length %d\n",
 				workingEncode.payloadLength);
 			System.out.println("Writing Data: " + new String(workingEncode.raw,
 				workingEncode.payloadStart, workingEncode.payloadLength));
-			s.getOutputStream().write(workingEncode.raw, 0,
-				workingEncode.totalLength);
+			out.write(workingEncode.raw, 0, workingEncode.totalLength);
 			return true;
 		}
 		
 		private boolean handle() throws IOException {
+			// Extremely simple "state machine"
 			if(mode == Mode.Http) return handleHttp();
 			if(mode == Mode.WebSocket) return handleWebSocket();
 			return true;
@@ -127,8 +153,10 @@ public class App {
 		server.setSoTimeout(1000);
 		server.setReuseAddress(true);
 		
-		System.out.println("Waiting for connections...");
+		System.out.println("Waiting for connections on port " + server.getLocalPort()
+			+ "...");
 		for(;;) {
+			// Exit server when Enter (or any character, I suppose) is pressed
 			if(System.in.available() > 0 && System.in.read() >= 0) break;
 			
 			Socket s = null;
@@ -138,7 +166,7 @@ public class App {
 				continue;
 			}
 			
-			
+			// Start up new socket worker as daemon
 			Worker w = new Worker(s);
 			w.setDaemon(true);
 			w.start();
