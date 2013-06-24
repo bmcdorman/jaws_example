@@ -11,6 +11,7 @@ import com.github.jaws.proto.v13.EncodedFrame;
 import com.github.jaws.proto.v13.HeaderConstants;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -37,7 +38,10 @@ public class App {
 			this.s = s;
 		}
 		
-		private boolean handleHttp(final InputStream in) throws IOException {
+		private boolean handleHttp() throws IOException {
+			final InputStream in = s.getInputStream();
+			final OutputStream out = s.getOutputStream();
+			
 			HttpRequestHeader header = HttpRequestHeader.parseRequestHeader(in);
 			if(header == null) return false;
 			System.out.println(header);
@@ -62,7 +66,12 @@ public class App {
 			return true;
 		}
 		
-		private boolean handleWebSocket(final InputStream in) throws IOException {
+		private boolean handleWebSocket() throws IOException {
+			final InputStream in = s.getInputStream();
+			final OutputStream out = s.getOutputStream();
+			
+			if(in.available() == 0) return true;
+			
 			System.out.println("Handle web socket");
 			try {
 				workingDecode = DecodedFrame.decode(in, workingDecode);
@@ -77,6 +86,7 @@ public class App {
 			
 			System.out.printf("Header: %x\n", workingDecode.header);
 			System.out.printf("Payload length: %d\n", workingDecode.payloadLength);
+			System.out.println("Data: " + new String(workingDecode.data, "UTF8"));
 			
 			System.out.println("Sending back encoded frame.");
 			workingEncode = EncodedFrame.encode(HeaderConstants.TEXT_FRAME_OPCODE, true,
@@ -85,14 +95,18 @@ public class App {
 				System.out.println("Encode was invalid");
 				return true;
 			}
-			System.out.printf("Writing payload of length %d\n", workingEncode.payloadLength);
-			s.getOutputStream().write(workingEncode.raw, 0, workingEncode.payloadLength);
+			System.out.printf("Writing payload of length %d\n",
+				workingEncode.payloadLength);
+			System.out.println("Writing Data: " + new String(workingEncode.raw,
+				workingEncode.payloadStart, workingEncode.payloadLength));
+			s.getOutputStream().write(workingEncode.raw, 0,
+				workingEncode.totalLength);
 			return true;
 		}
 		
-		private boolean handle(final InputStream in) throws IOException {
-			if(mode == Mode.Http) return handleHttp(in);
-			if(mode == Mode.WebSocket) return handleWebSocket(in);
+		private boolean handle() throws IOException {
+			if(mode == Mode.Http) return handleHttp();
+			if(mode == Mode.WebSocket) return handleWebSocket();
 			return true;
 		}
 		
@@ -100,7 +114,7 @@ public class App {
 		public void run() {
 			System.out.println("New connection from " + s.getInetAddress().toString());
 			try {
-				while(s.isConnected() && handle(s.getInputStream())) Thread.yield();
+				while(s.isConnected() && handle()) Thread.yield();
 			} catch(IOException e) {
 				e.printStackTrace();
 			}
@@ -118,7 +132,6 @@ public class App {
 			if(System.in.available() > 0 && System.in.read() >= 0) break;
 			
 			Socket s = null;
-			
 			try {
 				s = server.accept();
 			} catch(SocketTimeoutException e) {
