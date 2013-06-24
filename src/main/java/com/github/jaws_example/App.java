@@ -7,6 +7,7 @@ import com.github.jaws.proto.HandshakeException;
 import com.github.jaws.proto.ServerHandshake;
 import com.github.jaws.proto.v13.DecodeException;
 import com.github.jaws.proto.v13.DecodedFrame;
+import com.github.jaws.proto.v13.EncodeException;
 import com.github.jaws.proto.v13.EncodedFrame;
 import com.github.jaws.proto.v13.HeaderConstants;
 import java.io.IOException;
@@ -81,6 +82,13 @@ public class App {
 			return ret;
 		}
 		
+		private void closeWebSocket() throws EncodeException, IOException {
+			workingEncode = EncodedFrame.encode(
+				HeaderConstants.CONNECTION_CLOSE_FRAME_OPCODE,
+				true, false, null, 0, 0, workingEncode);
+			s.getOutputStream().write(workingEncode.raw, 0, workingEncode.totalLength);
+		}
+		
 		private boolean handleWebSocket() throws IOException {
 			final InputStream in = s.getInputStream();
 			final OutputStream out = s.getOutputStream();
@@ -101,7 +109,13 @@ public class App {
 				return true;
 			}
 			
-			System.out.printf("Header: %x\n", workingDecode.header);
+			final int header = workingDecode.header;
+			System.out.printf("Header: %x\n", header);
+			if((header & HeaderConstants.CONNECTION_CLOSE_FRAME_OPCODE) != 0) {
+				System.out.println("Client asked us to terminate the connection.");
+				closeWebSocket();
+				return false;
+			}
 			System.out.printf("Payload length: %d\n", workingDecode.payloadLength);
 			
 			// Reverse the words of the string
@@ -138,12 +152,14 @@ public class App {
 		
 		@Override
 		public void run() {
-			System.out.println("New connection from " + s.getInetAddress().toString());
+			System.out.println("New connection from " + s.getInetAddress());
 			try {
 				while(s.isConnected() && handle()) Thread.yield();
 			} catch(IOException e) {
 				e.printStackTrace();
 			}
+			System.out.println("Connection from " + s.getInetAddress()
+				+ " terminated.");
 		}
 	}
 
